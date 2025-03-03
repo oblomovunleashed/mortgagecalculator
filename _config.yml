@@ -1,0 +1,16 @@
+# _config.yml
+title: "Mortgage Calculator"
+description: "A tool for calculating mortgage payments, overpayment scenarios, and investment opportunity costs."
+theme: minima
+
+# Optional: Base URL of your site (if using a project page)
+# baseurl: "/your-repo-name"
+
+# Optional: URL of your site (for custom domains)
+# url: "https://yourusername.github.io"
+
+# Exclude any files or directories you don't want Jekyll to process.
+exclude:
+  - README.md
+
+# You can add additional configurations or plugins if needed.
