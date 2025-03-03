@@ -41,4 +41,271 @@ title: Mortgage Calculator
     .result {
       margin-top: 20px;
       padding: 15px;
-      bor
+      border: 1px solid #ccc;
+      background: #fafafa;
+    }
+    canvas {
+      max-width: 100%;
+      height: auto;
+    }
+  </style>
+</head>
+<body>
+  <h1>Mortgage Calculator with Overpayment, Dates & Graph</h1>
+  <form id="mortgageForm">
+    <label>
+      Principal Amount (£):
+      <input type="number" id="principal" step="0.01" required>
+    </label>
+    <label>
+      Start Date:
+      <input type="date" id="startDate" required>
+    </label>
+    <label>
+      Remortgage Date:
+      <input type="date" id="remortgageDate" required>
+    </label>
+    <label>
+      Planned End Date (No Overpayment Term End):
+      <input type="date" id="endDate" required>
+    </label>
+    <label>
+      Initial Interest Rate (annual %):
+      <input type="number" id="initialRate" step="0.01" required>
+    </label>
+    <label>
+      Remortgage Interest Rate (annual %):
+      <input type="number" id="remortgageRate" step="0.01" required>
+    </label>
+    <label>
+      Regular Overpayment Amount per Month (£):
+      <input type="number" id="overpayment" step="0.01">
+    </label>
+    <label>
+      Lump Sum Overpayment (£):
+      <input type="number" id="lumpSum" step="0.01">
+    </label>
+    <label>
+      Lump Sum Overpayment Date:
+      <input type="date" id="lumpSumDate">
+    </label>
+    <label>
+      Expected Investment Return (annual %):
+      <input type="number" id="investmentReturn" step="0.01">
+    </label>
+    <button type="button" onclick="calculateMortgage()">Calculate</button>
+  </form>
+  
+  <div id="results" class="result"></div>
+  
+  <canvas id="myChart"></canvas>
+  
+  <!-- Include Chart.js from CDN -->
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  
+  <script>
+    // Returns the number of whole months between two dates.
+    function monthsBetween(date1, date2) {
+      return (date2.getFullYear() - date1.getFullYear()) * 12 + (date2.getMonth() - date1.getMonth());
+    }
+    
+    // Calculates the monthly payment using the amortization formula.
+    function calculateMonthlyPayment(principal, annualRate, months) {
+      let monthlyRate = annualRate / 100 / 12;
+      return principal * monthlyRate / (1 - Math.pow(1 + monthlyRate, -months));
+    }
+    
+    // Simulates the mortgage payoff schedule until the balance reaches 0.
+    function simulateMortgage(principal, startDate, remortgageDate, plannedTermMonths, initialRate, remortgageRate, regularOverpayment, lumpSum, lumpSumDate) {
+      let fixedPeriodMonths = monthsBetween(startDate, remortgageDate);
+      let currentBalance = principal;
+      let currentMonth = 0;
+      let totalInterest = 0;
+      let timeline = [];
+      let monthlyPayment = 0;
+      
+      // Loop until the mortgage is paid off or until a safety limit is reached.
+      while(currentBalance > 0) {
+        let remainingPlannedMonths = plannedTermMonths - currentMonth;
+        if(remainingPlannedMonths < 1) remainingPlannedMonths = 1; // Avoid division by zero.
+        
+        // Use the initial rate until remortgage.
+        let rate = (currentMonth < fixedPeriodMonths) ? initialRate : remortgageRate;
+        
+        // Recalculate monthly payment at the start and at the moment of remortgage.
+        if(currentMonth === 0 || currentMonth === fixedPeriodMonths) {
+          monthlyPayment = calculateMonthlyPayment(currentBalance, rate, remainingPlannedMonths);
+          console.log("Recalculated monthlyPayment at month", currentMonth, ":", monthlyPayment);
+        }
+        
+        // Determine extra payment for this month.
+        let extra = regularOverpayment || 0;
+        if(lumpSum && lumpSumDate) {
+          let lumpSumMonth = monthsBetween(startDate, new Date(lumpSumDate));
+          if(currentMonth === lumpSumMonth) {
+            extra += lumpSum;
+            console.log("Applying lump sum of", lumpSum, "at month", currentMonth);
+          }
+        }
+        
+        let monthlyRate = rate / 100 / 12;
+        let interest = currentBalance * monthlyRate;
+        let principalComponent = monthlyPayment - interest;
+        let paymentThisMonth = principalComponent + extra;
+        
+        // Ensure we don't pay more than the remaining balance.
+        if(paymentThisMonth > currentBalance) {
+          paymentThisMonth = currentBalance;
+          principalComponent = paymentThisMonth - interest;
+        }
+        
+        currentBalance -= paymentThisMonth;
+        totalInterest += interest;
+        
+        timeline.push({
+          month: currentMonth,
+          balance: currentBalance,
+          interest: interest,
+          cumulativeInterest: totalInterest
+        });
+        
+        currentMonth++;
+        // Safety break to prevent infinite loops.
+        if(currentMonth > plannedTermMonths * 2) {
+          console.warn("Safety break: currentMonth exceeded planned limit.");
+          break;
+        }
+      }
+      
+      let payoffDate = new Date(startDate);
+      payoffDate.setMonth(payoffDate.getMonth() + currentMonth);
+      console.log("Mortgage paid off in", currentMonth, "months, payoff date:", payoffDate);
+      return {
+        timeline: timeline,
+        totalMonths: currentMonth,
+        totalInterest: totalInterest,
+        payoffDate: payoffDate
+      };
+    }
+    
+    // Calculates the future value of extra payments if they were invested.
+    function calculateInvestedValue(regularOverpayment, lumpSum, lumpSumDate, startDate, totalMonths, investmentReturn) {
+      let monthlyRate = investmentReturn / 100 / 12;
+      let investedValue = 0;
+      for (let m = 0; m < totalMonths; m++) {
+        let contribution = regularOverpayment || 0;
+        if(lumpSum && lumpSumDate) {
+          let lumpMonth = monthsBetween(startDate, new Date(lumpSumDate));
+          if(m === lumpMonth) {
+            contribution += lumpSum;
+          }
+        }
+        investedValue = investedValue * (1 + monthlyRate) + contribution;
+      }
+      return investedValue;
+    }
+    
+    // Main function: runs both simulations and displays outputs and a graph.
+    function calculateMortgage() {
+      try {
+        // Retrieve and parse input values.
+        let principal = parseFloat(document.getElementById("principal").value);
+        let startDate = new Date(document.getElementById("startDate").value);
+        let remortgageDate = new Date(document.getElementById("remortgageDate").value);
+        let endDate = new Date(document.getElementById("endDate").value);
+        let initialRate = parseFloat(document.getElementById("initialRate").value);
+        let remortgageRate = parseFloat(document.getElementById("remortgageRate").value);
+        let regularOverpayment = parseFloat(document.getElementById("overpayment").value) || 0;
+        let lumpSum = parseFloat(document.getElementById("lumpSum").value) || 0;
+        let lumpSumDateInput = document.getElementById("lumpSumDate").value;
+        let lumpSumDate = lumpSumDateInput ? new Date(lumpSumDateInput) : null;
+        let investmentReturn = parseFloat(document.getElementById("investmentReturn").value) || 0;
+        
+        // Validate date order.
+        if (remortgageDate <= startDate) {
+          alert("Remortgage Date must be after the Start Date.");
+          return;
+        }
+        if (endDate <= startDate) {
+          alert("Planned End Date must be after the Start Date.");
+          return;
+        }
+        
+        // Planned term (in months) is based on the no-overpayment end date.
+        let plannedTermMonths = monthsBetween(startDate, endDate);
+        if (plannedTermMonths <= 0) {
+          alert("Check the Planned End Date. It must be later than the Start Date.");
+          return;
+        }
+        
+        console.log("Planned term in months:", plannedTermMonths);
+        
+        // Run the simulations.
+        let resultNoOP = simulateMortgage(principal, startDate, remortgageDate, plannedTermMonths, initialRate, remortgageRate, 0, 0, null);
+        let resultWithOP = simulateMortgage(principal, startDate, remortgageDate, plannedTermMonths, initialRate, remortgageRate, regularOverpayment, lumpSum, lumpSumDate);
+        
+        // Calculate term reduction and interest saved.
+        let termReduction = resultNoOP.totalMonths - resultWithOP.totalMonths;
+        let interestSaved = resultNoOP.totalInterest - resultWithOP.totalInterest;
+        
+        // Calculate the future value if overpayments were invested.
+        let investedValue = ((regularOverpayment > 0 || lumpSum > 0) && investmentReturn > 0)
+                              ? calculateInvestedValue(regularOverpayment, lumpSum, lumpSumDate, startDate, resultNoOP.totalMonths, investmentReturn)
+                              : 0;
+        
+        // Display textual results.
+        let resultsDiv = document.getElementById("results");
+        resultsDiv.innerHTML = `
+          <h2>Results</h2>
+          <p><strong>No Overpayment Scenario:</strong></p>
+          <p>Payoff Date: ${resultNoOP.payoffDate.toDateString()} (${resultNoOP.totalMonths} months)</p>
+          <p>Total Interest Paid: £${resultNoOP.totalInterest.toFixed(2)}</p>
+          <hr>
+          <p><strong>With Overpayment Scenario:</strong></p>
+          <p>Payoff Date: ${resultWithOP.payoffDate.toDateString()} (${resultWithOP.totalMonths} months)</p>
+          <p>Total Interest Paid: £${resultWithOP.totalInterest.toFixed(2)}</p>
+          <hr>
+          <p><strong>Savings:</strong></p>
+          <p>Reduction in Term Length: ${termReduction} months</p>
+          <p>Interest Saved (Mortgage Savings): £${interestSaved.toFixed(2)}</p>
+          <p>Future Value if Overpayments Invested: £${investedValue.toFixed(2)}</p>
+        `;
+        
+        // Create a bar chart comparing Mortgage Savings and Invested Value.
+        let ctx = document.getElementById('myChart').getContext('2d');
+        if(window.myChart instanceof Chart) {
+          window.myChart.destroy();
+        }
+        
+        window.myChart = new Chart(ctx, {
+          type: 'bar',
+          data: {
+            labels: ['Mortgage Savings (£)', 'Invested Value (£)'],
+            datasets: [{
+              label: '£',
+              data: [interestSaved, investedValue],
+              backgroundColor: ['rgba(54, 162, 235, 0.7)', 'rgba(75, 192, 192, 0.7)']
+            }]
+          },
+          options: {
+            responsive: true,
+            scales: {
+              y: {
+                beginAtZero: true,
+                title: {
+                  display: true,
+                  text: 'Amount (£)'
+                }
+              }
+            }
+          }
+        });
+        
+      } catch (error) {
+        console.error("An error occurred:", error);
+        alert("An error occurred. Please check the console for details.");
+      }
+    }
+  </script>
+</body>
+</html>
