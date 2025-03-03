@@ -1,13 +1,18 @@
+---
+layout: default
+title: Mortgage Calculator
+---
+
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
   <meta charset="UTF-8">
-  <title>Mortgage Calculator with Overpayment, Lump Sum & Remortgage Analysis</title>
+  <title>Mortgage Calculator with Overpayment, Dates & Graph</title>
   <style>
     body {
       font-family: Arial, sans-serif;
       margin: 20px;
-      max-width: 800px;
+      max-width: 900px;
     }
     h1, h2 {
       color: #333;
@@ -17,6 +22,7 @@
       padding: 15px;
       border: 1px solid #ddd;
       border-radius: 4px;
+      margin-bottom: 20px;
     }
     label {
       display: block;
@@ -38,22 +44,30 @@
       border: 1px solid #ccc;
       background: #fafafa;
     }
+    canvas {
+      max-width: 100%;
+      height: auto;
+    }
   </style>
 </head>
 <body>
-  <h1>Mortgage Calculator with Overpayment, Lump Sum & Remortgage Analysis</h1>
+  <h1>Mortgage Calculator with Overpayment, Dates & Graph</h1>
   <form id="mortgageForm">
     <label>
-      Principal Amount ($):
+      Principal Amount (£):
       <input type="number" id="principal" step="0.01" required>
     </label>
     <label>
-      Total Loan Term (years):
-      <input type="number" id="loanTerm" step="1" required>
+      Start Date:
+      <input type="date" id="startDate" required>
     </label>
     <label>
-      Fixed Period Duration (years):
-      <input type="number" id="fixedPeriod" step="1" required>
+      Remortgage Date:
+      <input type="date" id="remortgageDate" required>
+    </label>
+    <label>
+      End Date (Loan End Date):
+      <input type="date" id="endDate" required>
     </label>
     <label>
       Initial Interest Rate (annual %):
@@ -64,16 +78,16 @@
       <input type="number" id="remortgageRate" step="0.01" required>
     </label>
     <label>
-      Regular Overpayment Amount per Month ($):
+      Regular Overpayment Amount per Month (£):
       <input type="number" id="overpayment" step="0.01">
     </label>
     <label>
-      Lump Sum Overpayment ($):
+      Lump Sum Overpayment (£):
       <input type="number" id="lumpSum" step="0.01">
     </label>
     <label>
-      Lump Sum Payment Month (within fixed period):
-      <input type="number" id="lumpSumMonth" step="1">
+      Lump Sum Overpayment Date:
+      <input type="date" id="lumpSumDate">
     </label>
     <label>
       Expected Investment Return (annual %):
@@ -84,121 +98,200 @@
   
   <div id="results" class="result"></div>
   
+  <canvas id="myChart"></canvas>
+  
+  <!-- Include Chart.js from CDN -->
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  
   <script>
+    // Helper function to calculate the difference in whole months between two dates.
+    function monthsBetween(date1, date2) {
+      return (date2.getFullYear() - date1.getFullYear()) * 12 + (date2.getMonth() - date1.getMonth());
+    }
+    
     // Calculate the monthly payment using the standard amortization formula.
     function calculateMonthlyPayment(principal, annualRate, months) {
       let monthlyRate = annualRate / 100 / 12;
       return principal * monthlyRate / (1 - Math.pow(1 + monthlyRate, -months));
     }
     
-    // Simulate a segment of the mortgage payments month-by-month.
-    // Accepts optional lump sum parameters (lumpSum and lumpSumMonth) to apply a one-time extra payment.
-    function simulateSegment(principal, annualRate, monthlyPayment, extraPayment, months, lumpSum = 0, lumpSumMonth = 0) {
-      let monthlyRate = annualRate / 100 / 12;
-      let totalInterest = 0;
-      let month = 0;
-      while (month < months && principal > 0) {
-        let interest = principal * monthlyRate;
-        let principalPayment = monthlyPayment - interest;
-        let totalExtra = extraPayment;
-        // If the current month (1-indexed) matches the lump sum month, add the lump sum.
-        if (lumpSumMonth > 0 && (month + 1) === lumpSumMonth) {
-          totalExtra += lumpSum;
+    // Format a JavaScript Date as "MMM YYYY" (e.g., "Jan 2026")
+    function formatDate(date) {
+      const options = { year: 'numeric', month: 'short' };
+      return date.toLocaleDateString(undefined, options);
+    }
+    
+    // Simulate a monthly schedule for the mortgage and investment growth.
+    // Returns arrays for date labels, mortgage balances (with and without overpayment),
+    // and cumulative invested value (if the extra money were invested).
+    function simulateSchedule(principal, startDate, remortgageDate, endDate, initialRate, remortgageRate, regularOverpayment, lumpSum, lumpSumDate, investmentReturn) {
+      let totalMonths = monthsBetween(startDate, endDate);
+      if(totalMonths < 1) totalMonths = 1;
+      
+      let fixedPeriodMonths = monthsBetween(startDate, remortgageDate);
+      if(fixedPeriodMonths < 1) fixedPeriodMonths = 1;
+      
+      // Determine the lump sum month (if provided). We use a 0-index (month 0 = start month).
+      let lumpSumMonth = lumpSumDate ? monthsBetween(startDate, new Date(lumpSumDate)) : -1;
+      
+      // Calculate initial monthly payment for the full term (no overpayments).
+      let monthlyPaymentInitial = calculateMonthlyPayment(principal, initialRate, totalMonths);
+      
+      let dataLabels = [];
+      let noOPBalances = [];
+      let withOPBalances = [];
+      let investedValues = [];
+      
+      let currentBalance_noOP = principal;
+      let currentBalance_withOP = principal;
+      let investedValue = 0;
+      
+      // For the initial phase, both scenarios use the same monthly payment.
+      let monthlyPayment_noOP = monthlyPaymentInitial;
+      let monthlyPayment_withOP = monthlyPaymentInitial;
+      let currentRate = initialRate;
+      
+      // Determine monthly growth factor for the investment.
+      let monthlyGrowth = investmentReturn ? (1 + investmentReturn/100/12) : 1;
+      
+      // Simulate each month.
+      for (let i = 0; i <= totalMonths; i++) {
+        // Compute the current date (advance i months from startDate).
+        let currentDate = new Date(startDate);
+        currentDate.setMonth(currentDate.getMonth() + i);
+        dataLabels.push(formatDate(currentDate));
+        
+        // At the start of the remortgage period, recalculate monthly payments using the remortgage rate.
+        if(i === fixedPeriodMonths) {
+          let remainingMonths = totalMonths - i;
+          monthlyPayment_noOP = calculateMonthlyPayment(currentBalance_noOP, remortgageRate, remainingMonths);
+          monthlyPayment_withOP = calculateMonthlyPayment(currentBalance_withOP, remortgageRate, remainingMonths);
+          currentRate = remortgageRate;
         }
-        let totalPayment = principalPayment + totalExtra;
-        // Avoid overpaying.
-        if (totalPayment > principal) {
-          totalPayment = principal;
+        
+        // For the "no overpayment" scenario, only update if there is an outstanding balance.
+        if(currentBalance_noOP > 0) {
+          let monthlyRate = currentRate / 100 / 12;
+          let interest_noOP = currentBalance_noOP * monthlyRate;
+          let principalComponent_noOP = monthlyPayment_noOP - interest_noOP;
+          currentBalance_noOP -= principalComponent_noOP;
+          if(currentBalance_noOP < 0) currentBalance_noOP = 0;
         }
-        principal -= totalPayment;
-        totalInterest += interest;
-        month++;
+        
+        // For the "with overpayment" scenario:
+        if(currentBalance_withOP > 0) {
+          let monthlyRate = currentRate / 100 / 12;
+          let interest_withOP = currentBalance_withOP * monthlyRate;
+          let principalComponent_withOP = monthlyPayment_withOP - interest_withOP;
+          // Apply the regular extra payment.
+          let extra = regularOverpayment ? regularOverpayment : 0;
+          // If this month matches the lump sum date, add the lump sum.
+          if(lumpSumMonth >= 0 && i === lumpSumMonth) {
+            extra += lumpSum;
+          }
+          currentBalance_withOP -= (principalComponent_withOP + extra);
+          if(currentBalance_withOP < 0) currentBalance_withOP = 0;
+        }
+        
+        // For the investment scenario: compound the invested money and add this month's contributions.
+        let contribution = regularOverpayment ? regularOverpayment : 0;
+        if(lumpSumMonth >= 0 && i === lumpSumMonth) {
+          contribution += lumpSum;
+        }
+        investedValue = investedValue * monthlyGrowth + contribution;
+        
+        noOPBalances.push(currentBalance_noOP);
+        withOPBalances.push(currentBalance_withOP);
+        investedValues.push(investedValue);
       }
+      
       return {
-        remainingPrincipal: principal,
-        totalInterest: totalInterest,
-        monthsTaken: month
+        labels: dataLabels,
+        noOPBalances: noOPBalances,
+        withOPBalances: withOPBalances,
+        invested: investedValues
       };
     }
     
-    // Calculate the future value of the overpayment amounts (both regular and lump sum) if they were invested.
-    function calculateOpportunityCost(overpayment, lumpSum, lumpSumMonth, investmentReturn, totalMonths, fixedPeriodMonths) {
-      let monthlyRateInvestment = investmentReturn / 100 / 12;
-      let futureValue = 0;
-      // Calculate the future value of regular overpayments made each month during the fixed period.
-      for (let m = 0; m < fixedPeriodMonths; m++) {
-        futureValue += overpayment * Math.pow(1 + monthlyRateInvestment, totalMonths - m);
-      }
-      // Add the future value of the lump sum payment if applied within the fixed period.
-      if (lumpSum > 0 && lumpSumMonth > 0 && lumpSumMonth <= fixedPeriodMonths) {
-        futureValue += lumpSum * Math.pow(1 + monthlyRateInvestment, totalMonths - lumpSumMonth);
-      }
-      return futureValue;
-    }
-    
-    // Main calculation function invoked by the "Calculate" button.
+    // Main calculation function called when the "Calculate" button is pressed.
     function calculateMortgage() {
-      // Retrieve and parse input values.
+      // Retrieve and parse inputs.
       let principal = parseFloat(document.getElementById("principal").value);
-      let loanTermYears = parseFloat(document.getElementById("loanTerm").value);
-      let fixedPeriodYears = parseFloat(document.getElementById("fixedPeriod").value);
+      let startDate = new Date(document.getElementById("startDate").value);
+      let remortgageDate = new Date(document.getElementById("remortgageDate").value);
+      let endDate = new Date(document.getElementById("endDate").value);
       let initialRate = parseFloat(document.getElementById("initialRate").value);
       let remortgageRate = parseFloat(document.getElementById("remortgageRate").value);
-      let overpayment = parseFloat(document.getElementById("overpayment").value) || 0;
+      let regularOverpayment = parseFloat(document.getElementById("overpayment").value) || 0;
       let lumpSum = parseFloat(document.getElementById("lumpSum").value) || 0;
-      let lumpSumMonth = parseInt(document.getElementById("lumpSumMonth").value) || 0;
+      let lumpSumDateInput = document.getElementById("lumpSumDate").value;
+      let lumpSumDate = lumpSumDateInput ? new Date(lumpSumDateInput) : null;
       let investmentReturn = parseFloat(document.getElementById("investmentReturn").value) || 0;
       
-      let totalMonths = loanTermYears * 12;
-      let fixedPeriodMonths = fixedPeriodYears * 12;
-      let remainingMonths = totalMonths - fixedPeriodMonths;
+      // Run the simulation.
+      let simData = simulateSchedule(principal, startDate, remortgageDate, endDate, initialRate, remortgageRate, regularOverpayment, lumpSum, lumpSumDate, investmentReturn);
       
-      // Calculate the initial monthly payment based on the full term and initial interest rate.
-      let monthlyPaymentInitial = calculateMonthlyPayment(principal, initialRate, totalMonths);
+      // Calculate overall results based on the final month.
+      let totalMonths = simData.labels.length - 1;
+      let final_noOP = simData.noOPBalances[totalMonths];
+      let final_withOP = simData.withOPBalances[totalMonths];
+      let totalSavings = final_noOP - final_withOP;
+      let finalInvested = simData.invested[totalMonths];
       
-      // ---- Scenario 1: Without Overpayments ----
-      let noOverpaymentFixed = simulateSegment(principal, initialRate, monthlyPaymentInitial, 0, fixedPeriodMonths);
-      let principalAfterFixed_noOP = noOverpaymentFixed.remainingPrincipal;
-      let monthlyPaymentRemortgage_noOP = calculateMonthlyPayment(principalAfterFixed_noOP, remortgageRate, remainingMonths);
-      let noOverpaymentRemortgage = simulateSegment(principalAfterFixed_noOP, remortgageRate, monthlyPaymentRemortgage_noOP, 0, remainingMonths);
-      let totalInterest_noOP = noOverpaymentFixed.totalInterest + noOverpaymentRemortgage.totalInterest;
-      
-      // ---- Scenario 2: With Regular and Lump Sum Overpayments During Fixed Period ----
-      let withOverpaymentFixed = simulateSegment(principal, initialRate, monthlyPaymentInitial, overpayment, fixedPeriodMonths, lumpSum, lumpSumMonth);
-      let principalAfterFixed_withOP = withOverpaymentFixed.remainingPrincipal;
-      let remMonths_withOP = principalAfterFixed_withOP > 0 ? remainingMonths : 0;
-      let monthlyPaymentRemortgage_withOP = remMonths_withOP > 0 ? calculateMonthlyPayment(principalAfterFixed_withOP, remortgageRate, remMonths_withOP) : 0;
-      let withOverpaymentRemortgage = remMonths_withOP > 0 ? simulateSegment(principalAfterFixed_withOP, remortgageRate, monthlyPaymentRemortgage_withOP, 0, remMonths_withOP) : { totalInterest: 0, monthsTaken: 0 };
-      let totalInterest_withOP = withOverpaymentFixed.totalInterest + withOverpaymentRemortgage.totalInterest;
-      
-      // Calculate interest saved due to overpayments.
-      let interestSaved = totalInterest_noOP - totalInterest_withOP;
-      
-      // Calculate total time (in months) to pay off the mortgage for each scenario.
-      let monthsToPay_noOP = noOverpaymentFixed.monthsTaken + noOverpaymentRemortgage.monthsTaken;
-      let monthsToPay_withOP = withOverpaymentFixed.monthsTaken + withOverpaymentRemortgage.monthsTaken;
-      
-      // Calculate the opportunity cost if the overpayment amounts were invested.
-      let futureValueInvested = ( (overpayment > 0 || lumpSum > 0) && investmentReturn > 0 )
-                                ? calculateOpportunityCost(overpayment, lumpSum, lumpSumMonth, investmentReturn, totalMonths, fixedPeriodMonths)
-                                : 0;
-      
-      // Display the results.
       let resultsDiv = document.getElementById("results");
       resultsDiv.innerHTML = `
         <h2>Results</h2>
-        <h3>Without Overpayments:</h3>
-        <p>Total Interest Paid: $${totalInterest_noOP.toFixed(2)}</p>
-        <p>Time to Payoff: ${monthsToPay_noOP} months (~${(monthsToPay_noOP / 12).toFixed(1)} years)</p>
-        <hr>
-        <h3>With Regular & Lump Sum Overpayments:</h3>
-        <p>Total Interest Paid: $${totalInterest_withOP.toFixed(2)}</p>
-        <p>Time to Payoff: ${monthsToPay_withOP} months (~${(monthsToPay_withOP / 12).toFixed(1)} years)</p>
-        <p>Interest Saved: $${interestSaved.toFixed(2)}</p>
-        <hr>
-        <h3>Opportunity Cost if Overpayments are Invested:</h3>
-        <p>Future Value of Overpayments: $${futureValueInvested.toFixed(2)}</p>
+        <p>Final Mortgage Balance without Overpayment: £${final_noOP.toFixed(2)}</p>
+        <p>Final Mortgage Balance with Overpayment: £${final_withOP.toFixed(2)}</p>
+        <p>Total Savings (Reduction in Mortgage Balance): £${totalSavings.toFixed(2)}</p>
+        <p>Future Value if Overpayments Invested: £${finalInvested.toFixed(2)}</p>
+        <p>Total Duration: ${totalMonths} months</p>
       `;
+      
+      // Create a graph comparing "Mortgage Savings" and "Invested Value".
+      let ctx = document.getElementById('myChart').getContext('2d');
+      if(window.myChart instanceof Chart) {
+        window.myChart.destroy();
+      }
+      
+      window.myChart = new Chart(ctx, {
+        type: 'line',
+        data: {
+          labels: simData.labels,
+          datasets: [
+            {
+              label: 'Mortgage Savings (£)',
+              // Savings is the difference between the no-overpayment and with-overpayment balances.
+              data: simData.noOPBalances.map((balance, i) => balance - simData.withOPBalances[i]),
+              borderColor: 'blue',
+              fill: false
+            },
+            {
+              label: 'Invested Value (£)',
+              data: simData.invested,
+              borderColor: 'green',
+              fill: false
+            }
+          ]
+        },
+        options: {
+          responsive: true,
+          scales: {
+            x: {
+              title: {
+                display: true,
+                text: 'Date'
+              }
+            },
+            y: {
+              title: {
+                display: true,
+                text: 'Amount (£)'
+              }
+            }
+          }
+        }
+      });
     }
   </script>
 </body>
